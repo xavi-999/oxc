@@ -7,7 +7,7 @@
 //! [`CoverParenthesizedExpressionAndArrowParameterList`]: https://tc39.es/ecma262/#prod-CoverParenthesizedExpressionAndArrowParameterList
 //! [`CoverCallExpressionAndAsyncArrowHead`]: https://tc39.es/ecma262/#prod-CoverCallExpressionAndAsyncArrowHead
 
-use std::{mem, num::NonZeroU32};
+use std::mem;
 
 use oxc_allocator::{ArenaBox, ArenaVec, Dummy, GetAllocator};
 use oxc_ast::ast::*;
@@ -44,8 +44,8 @@ pub enum CoverElement<'a> {
 pub(super) struct CoverIdentifier<'a> {
     pub(super) span: Span,
     pub(super) name: Ident<'a>,
-    pure_comments: Option<(u32, NonZeroU32)>,
-    no_side_effects_comments: Option<(u32, NonZeroU32)>,
+    pure_comments: Option<u32>,
+    no_side_effects_comments: Option<u32>,
 }
 
 /// A construct that only a parameter can have, found while parsing a cover list.
@@ -229,7 +229,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     && let Expression::ArrowFunctionExpression(function) = &mut arrow
                 {
                     function.pure = true;
-                    self.lexer.trivia_builder.mark_no_side_effects_comments_applied(comments);
+                    self.applied_annotations.push(comments);
                 }
                 CoverElement::Expression(arrow)
             }
@@ -732,7 +732,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         cover: Cover,
         first_start: u32,
         end: u32,
-        no_side_effects_comments: Option<(u32, NonZeroU32)>,
+        no_side_effects_comments: Option<u32>,
     ) -> Expression<'a> {
         let len = self.state.cover_elements.len() - cover.base;
         let expression = match self.state.cover_elements.pop() {
@@ -772,21 +772,21 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         start: u32,
         parenthesized_base: usize,
         mut expression: Expression<'a>,
-        no_side_effects_comments: Option<(u32, NonZeroU32)>,
+        no_side_effects_comments: Option<u32>,
     ) -> Expression<'a> {
         match &mut expression {
             Expression::ArrowFunctionExpression(arrow_expr) => {
                 arrow_expr.pife = true;
                 if let Some(comments) = no_side_effects_comments {
                     arrow_expr.pure = true;
-                    self.lexer.trivia_builder.mark_no_side_effects_comments_applied(comments);
+                    self.applied_annotations.push(comments);
                 }
             }
             Expression::FunctionExpression(func_expr) => {
                 func_expr.pife = true;
                 if let Some(comments) = no_side_effects_comments {
                     func_expr.pure = true;
-                    self.lexer.trivia_builder.mark_no_side_effects_comments_applied(comments);
+                    self.applied_annotations.push(comments);
                 }
             }
             _ => {}

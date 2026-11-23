@@ -3,7 +3,7 @@
 //! `( … )` and `async ( … )` are parsed once with the cover grammars in [`super::cover`],
 //! and refined to arrow function parameters if `=>` follows.
 
-use std::{mem, num::NonZeroU32};
+use std::mem;
 
 use oxc_allocator::{ArenaBox, ArenaVec};
 use oxc_ast::ast::*;
@@ -42,7 +42,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     pub(super) fn parse_parenthesized_expression_or_arrow_function(
         &mut self,
         allow_return_type_in_arrow_function: bool,
-        no_side_effects_comments: Option<(u32, NonZeroU32)>,
+        no_side_effects_comments: Option<u32>,
     ) -> (Expression<'a>, bool) {
         debug_assert!(self.at(Kind::LParen));
         let start = self.cur_start();
@@ -224,7 +224,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         &mut self,
         cover: Cover,
         identifier: Option<CoverIdentifier<'a>>,
-        no_side_effects_comments: Option<(u32, NonZeroU32)>,
+        no_side_effects_comments: Option<u32>,
     ) -> Result<Expression<'a>, Option<u32>> {
         let ctx = self.ctx;
         self.ctx = ctx.and_in(true).and_decorator(false);

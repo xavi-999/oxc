@@ -541,6 +541,11 @@ struct ParserImpl<'a, C: ParserConfig> {
     /// If resolved to Script → emit these errors.
     deferred_script_errors: Vec<ParserDiagnostic<'a>>,
 
+    /// Annotations which were applied, by the start of the first annotation of a kind before a
+    /// token. The comments are marked once parsing is done, so that rewinding discards those
+    /// applied by the parse which is discarded.
+    applied_annotations: Vec<u32>,
+
     fatal_error: Option<FatalError<'a>>,
 
     /// The current parsing token
@@ -594,6 +599,7 @@ impl<'a, C: ParserConfig> ParserImpl<'a, C> {
             source_text,
             errors: vec![],
             deferred_script_errors: vec![],
+            applied_annotations: vec![],
             fatal_error: None,
             token: Token::default(),
             prev_token_end: 0,
@@ -709,6 +715,7 @@ impl<'a, C: ParserConfig> ParserImpl<'a, C> {
             self.lexer.finalize_tokens()
         };
 
+        self.lexer.trivia_builder.apply_annotations(&self.applied_annotations);
         program.comments = self.lexer.trivia_builder.comments.take_vec(&self.ast);
 
         ParserReturn {

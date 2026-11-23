@@ -16,6 +16,7 @@ pub struct ParserCheckpoint<'a> {
     cur_token: Token,
     prev_token_end: u32,
     errors_pos: usize,
+    applied_annotations_len: usize,
     cover_parenthesized_len: usize,
     has_fatal_error: bool,
 }
@@ -349,6 +350,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             cur_token: self.token,
             prev_token_end: self.prev_token_end,
             errors_pos: self.errors.len(),
+            applied_annotations_len: self.applied_annotations.len(),
             cover_parenthesized_len: self.state.cover_parenthesized.len(),
             has_fatal_error: self.fatal_error.is_some(),
         }
@@ -360,6 +362,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             cur_token,
             prev_token_end,
             errors_pos,
+            applied_annotations_len,
             cover_parenthesized_len,
             has_fatal_error,
         } = checkpoint;
@@ -376,13 +379,16 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         self.token = cur_token;
         self.prev_token_end = prev_token_end;
         self.errors.truncate(errors_pos);
+        self.applied_annotations.truncate(applied_annotations_len);
         self.state.cover_parenthesized.truncate(cover_parenthesized_len);
     }
 
-    /// Rewind to `checkpoint`, keeping the comments and irregular whitespace lexed after it.
+    /// Rewind to `checkpoint`, keeping the comments and irregular whitespace lexed after it,
+    /// and the annotations applied after it.
     /// Only for when the source after `checkpoint` is not all lexed again.
     pub(crate) fn rewind_keeping_trivia(&mut self, mut checkpoint: ParserCheckpoint<'a>) {
         self.lexer.keep_trivia(&mut checkpoint.lexer);
+        checkpoint.applied_annotations_len = self.applied_annotations.len();
         self.rewind(checkpoint);
     }
 

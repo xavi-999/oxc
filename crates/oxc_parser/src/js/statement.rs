@@ -1,5 +1,3 @@
-use std::num::NonZeroU32;
-
 use oxc_allocator::{ArenaBox, ArenaVec};
 use oxc_ast::ast::*;
 use oxc_span::{GetSpan, Span};
@@ -212,11 +210,11 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     #[inline(never)]
     pub(super) fn apply_no_side_effects_comments_to_statement(
         &mut self,
-        comments: (u32, NonZeroU32),
+        comments: u32,
         stmt: &mut Statement<'a>,
     ) {
         if Self::set_pure_on_function_stmt(stmt) {
-            self.lexer.trivia_builder.mark_no_side_effects_comments_applied(comments);
+            self.applied_annotations.push(comments);
         }
     }
 

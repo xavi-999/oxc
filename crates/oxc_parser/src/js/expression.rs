@@ -1,5 +1,3 @@
-use std::num::NonZeroU32;
-
 use cow_utils::CowUtils;
 use oxc_allocator::{ArenaBox, ArenaVec, GetAllocator, ReplaceWith};
 use oxc_ast::ast::*;
@@ -394,14 +392,14 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 arrow_expr.pife = true;
                 if let Some(comments) = no_side_effects_comments {
                     arrow_expr.pure = true;
-                    self.lexer.trivia_builder.mark_no_side_effects_comments_applied(comments);
+                    self.applied_annotations.push(comments);
                 }
             }
             Expression::FunctionExpression(func_expr) => {
                 func_expr.pife = true;
                 if let Some(comments) = no_side_effects_comments {
                     func_expr.pure = true;
-                    self.lexer.trivia_builder.mark_no_side_effects_comments_applied(comments);
+                    self.applied_annotations.push(comments);
                 }
             }
             _ => {}
@@ -1453,7 +1451,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         &mut self,
         start: u32,
         primary: Expression<'a>,
-        pure_comments: Option<(u32, NonZeroU32)>,
+        pure_comments: Option<u32>,
     ) -> Expression<'a> {
         let mut lhs = if matches!(
             self.cur_kind(),
@@ -1706,9 +1704,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                             && let Expression::ArrowFunctionExpression(func) = &mut arrow_expr
                         {
                             func.pure = true;
-                            self.lexer
-                                .trivia_builder
-                                .mark_no_side_effects_comments_applied(comments);
+                            self.applied_annotations.push(comments);
                         }
                         return arrow_expr;
                     }
@@ -1817,7 +1813,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                         && let Expression::ArrowFunctionExpression(func) = &mut arrow_expr
                     {
                         func.pure = true;
-                        self.lexer.trivia_builder.mark_no_side_effects_comments_applied(comments);
+                        self.applied_annotations.push(comments);
                     }
                     return arrow_expr;
                 }
@@ -1842,7 +1838,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 && let Expression::ArrowFunctionExpression(func) = &mut arrow_expr
             {
                 func.pure = true;
-                self.lexer.trivia_builder.mark_no_side_effects_comments_applied(comments);
+                self.applied_annotations.push(comments);
             }
             return arrow_expr;
         }
@@ -1876,7 +1872,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         &mut self,
         start: u32,
         primary: Expression<'a>,
-        pure_comments: Option<(u32, NonZeroU32)>,
+        pure_comments: Option<u32>,
         lhs_parenthesized: bool,
     ) -> Expression<'a> {
         let lhs = self.parse_primary_expression_rest(start, primary, pure_comments);
@@ -1893,7 +1889,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         &mut self,
         start: u32,
         primary: Expression<'a>,
-        pure_comments: Option<(u32, NonZeroU32)>,
+        pure_comments: Option<u32>,
     ) -> Expression<'a> {
         let lhs = self.parse_primary_expression_rest(start, primary, pure_comments);
         let lhs = if kind_to_precedence(self.cur_kind()).is_none() {
@@ -1917,13 +1913,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 
     #[cold]
     #[inline(never)]
-    fn apply_pure_comments_to_call(
-        &mut self,
-        comments: (u32, NonZeroU32),
-        expr: &mut Expression<'a>,
-    ) {
+    fn apply_pure_comments_to_call(&mut self, comments: u32, expr: &mut Expression<'a>) {
         if Self::set_pure_on_call_or_new_expr(expr) {
-            self.lexer.trivia_builder.mark_pure_comments_applied(comments);
+            self.applied_annotations.push(comments);
         }
     }
 
@@ -1931,11 +1923,11 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     #[inline(never)]
     fn apply_no_side_effects_comments_to_function(
         &mut self,
-        comments: (u32, NonZeroU32),
+        comments: u32,
         expr: &mut Expression<'a>,
     ) {
         if Self::set_pure_on_function_expr(expr) {
-            self.lexer.trivia_builder.mark_no_side_effects_comments_applied(comments);
+            self.applied_annotations.push(comments);
         }
     }
 
