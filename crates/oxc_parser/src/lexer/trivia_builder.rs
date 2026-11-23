@@ -12,9 +12,6 @@ pub struct Comments<'a> {
     inline: [Comment; 16],
     len: usize,
     vec: ArenaVec<'a, Comment>,
-    /// Source offset which every comment starts before.
-    /// 1 more than the start of the last comment, or 0 if there are no comments.
-    starts_end: u32,
 }
 
 impl<'a> Comments<'a> {
@@ -23,29 +20,18 @@ impl<'a> Comments<'a> {
             inline: std::array::from_fn(|_| Comment::new(0, 0, CommentKind::Line)),
             len: 0,
             vec: ArenaVec::new_in(&allocator),
-            starts_end: 0,
         }
     }
 
     #[inline]
-    fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.len
-    }
-
-    /// Returns `true` if a comment which starts at `start` was added before.
-    ///
-    /// Comments are added in source order, so that is any comment which does not start
-    /// after the last one.
-    #[inline]
-    fn is_seen(&self, start: u32) -> bool {
-        start < self.starts_end
     }
 
     /// Add a comment. It must start after the last one.
     #[inline]
-    fn push(&mut self, comment: Comment) {
-        debug_assert!(!self.is_seen(comment.span.start));
-        self.starts_end = comment.span.start + 1;
+    pub(crate) fn push(&mut self, comment: Comment) {
+        debug_assert!(self.last().is_none_or(|last| last.span.start < comment.span.start));
         if self.vec.is_empty() && self.len < self.inline.len() {
             self.inline[self.len] = comment;
         } else {
@@ -62,8 +48,14 @@ impl<'a> Comments<'a> {
         if len < self.len {
             self.len = len;
             self.vec.truncate(len);
-            self.starts_end = self.last().map_or(0, |comment| comment.span.start + 1);
         }
+    }
+
+    /// Remove the comments after the first `len`, and return them.
+    pub(crate) fn split_off(&mut self, len: usize) -> Vec<Comment> {
+        let tail = self.get(len..).map_or_else(Vec::new, <[Comment]>::to_vec);
+        self.truncate(len);
+        tail
     }
 
     /// Move the comments to arena storage, once there are too many to store inline.
@@ -84,7 +76,6 @@ impl<'a> Comments<'a> {
             self.vec.extend(self.inline[..self.len].iter().cloned());
         }
         self.len = 0;
-        self.starts_end = 0;
         self.vec.take_in(allocator)
     }
 }
@@ -107,9 +98,7 @@ impl DerefMut for Comments<'_> {
 
 #[derive(Debug)]
 pub struct TriviaBuilder<'a> {
-    // This is a set of unique comments. Duplicated
-    // comments could be generated in case of rewind; they are
-    // filtered out at insertion time.
+    /// Comments in source order.
     pub(crate) comments: Comments<'a>,
 
     pub(crate) irregular_whitespaces: Vec<Span>,
@@ -128,8 +117,8 @@ pub struct TriviaBuilder<'a> {
 /// Trivia state saved by lexer checkpoints.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct TriviaCheckpoint {
-    comments_len: usize,
-    irregular_whitespaces_len: usize,
+    pub(super) comments_len: usize,
+    pub(super) irregular_whitespaces_len: usize,
     previous_token: Token,
     annotation_comments: AnnotationComments,
 }
@@ -176,10 +165,13 @@ impl<'a> TriviaBuilder<'a> {
         self.annotation_comments = checkpoint.annotation_comments;
     }
 
-    /// Make rewinding to `checkpoint` keep the trivia lexed after it.
-    pub(super) fn keep_trivia(&self, checkpoint: &mut TriviaCheckpoint) {
-        checkpoint.comments_len = self.comments.len();
-        checkpoint.irregular_whitespaces_len = self.irregular_whitespaces.len();
+    /// Continue after the token of `checkpoint`, keeping all trivia.
+    ///
+    /// The comments before that token must be the last comments.
+    pub(super) fn resume(&mut self, checkpoint: &TriviaCheckpoint) {
+        self.processed = self.comments.len();
+        self.previous_token = checkpoint.previous_token;
+        self.annotation_comments = checkpoint.annotation_comments;
     }
 
     /// Start of the first pure comment before the current token.
@@ -222,14 +214,6 @@ impl<'a> TriviaBuilder<'a> {
     }
 
     pub fn add_irregular_whitespace(&mut self, start: u32, end: u32) {
-        // The irregular whitespaces array is ordered; only add if not added before, to avoid
-        // duplicates when the parser rewinds keeping trivia, then re-lexes the same whitespace.
-        // Same approach as comments.
-        if let Some(last) = self.irregular_whitespaces.last()
-            && start <= last.start
-        {
-            return;
-        }
         self.irregular_whitespaces.push(Span::new(start, end));
     }
 
@@ -247,11 +231,6 @@ impl<'a> TriviaBuilder<'a> {
         pending: &mut PendingToken,
     ) {
         let mut comment = Comment::new(start, end, kind);
-        if self.is_seen_comment(start) {
-            self.replay_comment(&comment);
-            return;
-        }
-
         let content_span = comment.content_span();
         let bytes = &source_text.as_bytes()[content_span.start as usize..content_span.end as usize];
         comment.content = comment_content(bytes, false, has_legal_tag, content_span, source_text);
@@ -293,11 +272,6 @@ impl<'a> TriviaBuilder<'a> {
         pending: &mut PendingToken,
     ) {
         let mut comment = Comment::new(start, end, kind);
-        if self.is_seen_comment(start) {
-            self.replay_comment(&comment);
-            return;
-        }
-
         let content_span = comment.content_span();
         let bytes = &source_text.as_bytes()[content_span.start as usize..content_span.end as usize];
         comment.content = comment_content(bytes, true, has_legal_tag, content_span, source_text);
@@ -314,39 +288,7 @@ impl<'a> TriviaBuilder<'a> {
         pending.set_has_pending_comments(true);
     }
 
-    /// Returns `true` if a comment which starts at `start` was added before.
-    ///
-    /// The comments array is an ordered vec, only add the comment if its not added before,
-    /// to avoid situations where the parser needs to rewind and tries to reinsert the comment.
-    #[inline]
-    fn is_seen_comment(&self, start: u32) -> bool {
-        self.comments.is_seen(start)
-    }
-
-    /// Handle a comment which was added before. The parser rewound, and is lexing it again.
-    #[cold]
-    #[inline(never)]
-    fn replay_comment(&mut self, comment: &Comment) {
-        // A comment is only seen once a comment has been added
-        let last_comment = self.comments.last().unwrap();
-        debug_assert!(comment.span.start <= last_comment.span.start);
-        // Reuse the classification from before lookahead/rewind.
-        // Usually this is the most recent comment.
-        let index = if comment.span.start == last_comment.span.start {
-            Some(self.comments.len() - 1)
-        } else {
-            self.comments
-                .binary_search_by_key(&comment.span.start, |existing| existing.span.start)
-                .ok()
-        };
-        if let Some(index) = index
-            && self.comments[index].span == comment.span
-        {
-            self.set_annotation_flags(self.comments[index].content, comment.span.start);
-        }
-    }
-
-    /// Add a comment which was not added before, once it is complete.
+    /// Add a comment, once it is complete.
     #[inline]
     fn push_comment(&mut self, comment: Comment) {
         self.set_annotation_flags(comment.content, comment.span.start);
@@ -742,60 +684,6 @@ mod test {
     use oxc_syntax::node::NodeId;
 
     use crate::Parser;
-
-    use super::{PendingToken, TriviaBuilder};
-
-    #[test]
-    fn annotation_flags_restored_when_replaying_comments() {
-        for annotation in ["/* @__PURE__ */", "/* @__NO_SIDE_EFFECTS__ */"] {
-            for suffix in ["", "/* later comment */"] {
-                let source = format!("{annotation}{suffix}");
-                let annotation_end = u32::try_from(annotation.len()).unwrap();
-                let source_end = u32::try_from(source.len()).unwrap();
-                let allocator = Allocator::default();
-                let mut builder = TriviaBuilder::new_in(&allocator);
-                let mut pending = PendingToken::START_OF_FILE;
-                builder.add_block_comment(
-                    0,
-                    annotation_end,
-                    CommentKind::SingleLineBlock,
-                    false,
-                    &source,
-                    &mut pending,
-                );
-                if !suffix.is_empty() {
-                    builder.add_block_comment(
-                        annotation_end,
-                        source_end,
-                        CommentKind::SingleLineBlock,
-                        false,
-                        &source,
-                        &mut pending,
-                    );
-                }
-
-                let pure = builder.previous_token_pure_comments();
-                let no_side_effects = builder.previous_token_no_side_effects_comments();
-                let content = builder.comments[0].content;
-                builder.clear_annotation_comments();
-
-                // Replaying the annotation must restore its range without changing
-                // its content, even when a later comment exists.
-                builder.add_block_comment(
-                    0,
-                    annotation_end,
-                    CommentKind::SingleLineBlock,
-                    false,
-                    &source,
-                    &mut pending,
-                );
-                assert_eq!(builder.previous_token_pure_comments(), pure);
-                assert_eq!(builder.previous_token_no_side_effects_comments(), no_side_effects);
-                assert_eq!(builder.comments[0].content, content);
-                assert_eq!(builder.comments.len(), 1 + usize::from(!suffix.is_empty()));
-            }
-        }
-    }
 
     fn get_comments(source_text: &str) -> Vec<Comment> {
         let allocator = Allocator::default();

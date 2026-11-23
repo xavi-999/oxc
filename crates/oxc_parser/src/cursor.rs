@@ -21,6 +21,29 @@ pub struct ParserCheckpoint<'a> {
     has_fatal_error: bool,
 }
 
+impl<'a> ParserCheckpoint<'a> {
+    pub(crate) fn lexer(&self) -> &LexerCheckpoint<'a> {
+        &self.lexer
+    }
+
+    /// The current token when the checkpoint was saved.
+    pub(crate) fn token(&self) -> Token {
+        self.cur_token
+    }
+
+    pub(crate) fn prev_token_end(&self) -> u32 {
+        self.prev_token_end
+    }
+
+    pub(crate) fn errors_len(&self) -> usize {
+        self.errors_pos
+    }
+
+    pub(crate) fn applied_annotations_len(&self) -> usize {
+        self.applied_annotations_len
+    }
+}
+
 impl<'a, C: Config> ParserImpl<'a, C> {
     /// Get current token's span start.
     #[inline]
@@ -383,13 +406,15 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         self.state.cover_parenthesized.truncate(cover_parenthesized_len);
     }
 
-    /// Rewind to `checkpoint`, keeping the comments and irregular whitespace lexed after it,
-    /// and the annotations applied after it.
-    /// Only for when the source after `checkpoint` is not all lexed again.
-    pub(crate) fn rewind_keeping_trivia(&mut self, mut checkpoint: ParserCheckpoint<'a>) {
-        self.lexer.keep_trivia(&mut checkpoint.lexer);
-        checkpoint.applied_annotations_len = self.applied_annotations.len();
-        self.rewind(checkpoint);
+    /// Continue parsing from `checkpoint`, keeping all output.
+    ///
+    /// The output before `checkpoint` must have been put back, though maybe at different indexes.
+    pub(crate) fn resume(&mut self, checkpoint: &ParserCheckpoint<'a>) {
+        debug_assert!(!checkpoint.has_fatal_error && self.fatal_error.is_none());
+        debug_assert_eq!(self.state.cover_parenthesized.len(), checkpoint.cover_parenthesized_len);
+        self.lexer.resume(&checkpoint.lexer);
+        self.token = checkpoint.cur_token;
+        self.prev_token_end = checkpoint.prev_token_end;
     }
 
     pub(crate) fn lookahead<U>(&mut self, predicate: impl Fn(&mut ParserImpl<'a, C>) -> U) -> U {
